@@ -84,6 +84,29 @@
 #endif
 #endif
 
+#if defined(__FDPIC__)
+/* This data structure represents a PT_LOAD segment.  */
+struct elf32_fdpic_loadseg
+{
+  /* Core address to which the segment is mapped.  */
+  Elf32_Addr addr;
+  /* VMA recorded in the program header.  */
+  Elf32_Addr p_vaddr;
+  /* Size of this segment in memory.  */
+  Elf32_Word p_memsz;
+};
+
+struct elf32_fdpic_loadmap {
+  /* Protocol version number, must be zero.  */
+  Elf32_Half version;
+  /* Number of segments in this map.  */
+  Elf32_Half nsegs;
+  /* The actual memory map.  */
+  struct elf32_fdpic_loadseg segs[/*nsegs*/];
+};
+
+#endif
+
 #ifndef HAVE_ELF32_AUXV_T
 /* Copied from glibc's elf.h.  */
 typedef struct
@@ -4856,6 +4879,18 @@ linux_read_offsets (CORE_ADDR *text_p, CORE_ADDR *data_p)
       *data_p = data - (text_end - text);
 
       return 1;
+    }
+#elif defined(__FDPIC__)
+    long ret;
+    struct elf32_fdpic_loadmap *loadmap;
+    int pid = lwpid_of (get_thread_lwp (current_inferior));
+
+    ret = ptrace (PTRACE_GETFDPIC, pid, PTRACE_GETFDPIC_EXEC, &loadmap);
+    if (ret == 0) {
+        *text_p = (CORE_ADDR) (loadmap->segs[0].addr - loadmap->segs[0].p_vaddr);
+        *data_p = (CORE_ADDR) (loadmap->segs[1].addr - loadmap->segs[1].p_vaddr);
+
+        return 1;
     }
 #endif
  return 0;
