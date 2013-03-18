@@ -51,6 +51,8 @@
 
 #include "gdb_string.h"
 
+#define FDPIC           1
+
 /* This is defined in <elf.h> on ARM GNU/Linux systems.  */
 #define AT_HWCAP        16
 
@@ -1230,8 +1232,14 @@ arm_linux_init_abi (struct gdbarch_info info,
     }
   tdep->jb_elt_size = ARM_LINUX_JB_ELEMENT_SIZE;
 
+#if defined(FDPIC)
+  extern struct target_so_ops fdpic_so_ops;
+
+  set_solib_ops (gdbarch, &fdpic_so_ops);
+#else
   set_solib_svr4_fetch_link_map_offsets
     (gdbarch, svr4_ilp32_fetch_link_map_offsets);
+#endif
 
   /* Single stepping.  */
   set_gdbarch_software_single_step (gdbarch, arm_linux_software_single_step);
@@ -1241,8 +1249,15 @@ arm_linux_init_abi (struct gdbarch_info info,
   set_gdbarch_skip_solib_resolver (gdbarch, glibc_skip_solib_resolver);
 
   /* Enable TLS support.  */
+#if defined(FDPIC)
+  extern CORE_ADDR fdpic_fetch_objfile_link_map (struct objfile *objfile);
+
+  set_gdbarch_fetch_tls_load_module_address (gdbarch,
+                                             fdpic_fetch_objfile_link_map);
+#else
   set_gdbarch_fetch_tls_load_module_address (gdbarch,
                                              svr4_fetch_objfile_link_map);
+#endif
 
   tramp_frame_prepend_unwinder (gdbarch,
 				&arm_linux_sigreturn_tramp_frame);
