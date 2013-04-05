@@ -191,12 +191,15 @@ fdpic_get_initial_loadmaps (void)
   dump_loadmap(info->exec_loadmap);
   if (0 >= target_read_alloc (&current_target, TARGET_OBJECT_FDPIC, "interp", (gdb_byte**) &buf)) {
     info->interp_loadmap = NULL;
-    error (_("Error reading FDPIC interp loadmap"));
+    if (solib_fdpic_debug)
+        fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap (static binary detected)\n");
   } else if (solib_fdpic_debug) {
     fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap\n");
   }
-  info->interp_loadmap = decode_loadmap (buf);
-  dump_loadmap(info->interp_loadmap);
+  if (info->interp_loadmap) {
+      info->interp_loadmap = decode_loadmap (buf);
+      dump_loadmap(info->interp_loadmap);
+  }
 }
 
 static void
@@ -291,7 +294,7 @@ enable_break (void)
   if (interp_sect == NULL) {
       if (solib_fdpic_debug)
         fprintf_unfiltered (gdb_stdlog, "enable_break: No .interp section found.\n");
-      return 0;
+      return 1;
   }
 
   create_solib_event_breakpoint (target_gdbarch, symfile_objfile->ei.entry_point);
@@ -562,6 +565,10 @@ fdpic_current_sos (void)
      infcmd.c.)  */
   if (info->main_executable_lm_info == 0 && core_bfd != NULL)
     fdpic_relocate_main_executable ();
+
+  /* check for a static binary */
+  if (!info->interp_loadmap)
+    return NULL;
 
   /* Locate the address of the first link map struct.  */
   lm_addr = lm_base ();
