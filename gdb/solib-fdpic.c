@@ -193,12 +193,11 @@ fdpic_get_initial_loadmaps (void)
     info->interp_loadmap = NULL;
     if (solib_fdpic_debug)
         fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap (static binary detected)\n");
-  } else if (solib_fdpic_debug) {
-    fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap\n");
-  }
-  if (info->interp_loadmap) {
-      info->interp_loadmap = decode_loadmap (buf);
-      dump_loadmap(info->interp_loadmap);
+  } else {
+    if (solib_fdpic_debug)
+        fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap\n");
+    info->interp_loadmap = decode_loadmap (buf);
+    dump_loadmap(info->interp_loadmap);
   }
 }
 
