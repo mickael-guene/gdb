@@ -65,6 +65,11 @@
 #include "features/arm-with-vfpv3.c"
 #include "features/arm-with-neon.c"
 
+#define FDPIC           1
+#if defined(FDPIC)
+  extern CORE_ADDR fdpic_find_global_pointer (CORE_ADDR addr);
+#endif
+
 static int arm_debug;
 
 /* Macros for setting and testing a bit in a minimal symbol that marks
@@ -3748,6 +3753,14 @@ arm_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
       write_memory (sp, si->data, si->len);
       si = pop_stack_item (si);
     }
+
+#if defined(FDPIC)
+  {
+    CORE_ADDR func_addr = find_function_addr (function, NULL);
+
+    regcache_cooked_write_unsigned(regcache, 9, fdpic_find_global_pointer(func_addr));
+  }
+#endif
 
   /* Finally, update teh SP register.  */
   regcache_cooked_write_unsigned (regcache, ARM_SP_REGNUM, sp);
