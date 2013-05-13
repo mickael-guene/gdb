@@ -65,11 +65,6 @@
 #include "features/arm-with-vfpv3.c"
 #include "features/arm-with-neon.c"
 
-#define FDPIC           1
-#if defined(FDPIC)
-  extern CORE_ADDR fdpic_find_global_pointer (CORE_ADDR addr);
-#endif
-
 static int arm_debug;
 
 /* Macros for setting and testing a bit in a minimal symbol that marks
@@ -3538,6 +3533,7 @@ arm_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 		     struct value **args, CORE_ADDR sp, int struct_return,
 		     CORE_ADDR struct_addr)
 {
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   int argnum;
   int argreg;
@@ -3754,13 +3750,13 @@ arm_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
       si = pop_stack_item (si);
     }
 
-#if defined(FDPIC)
-  {
+  if (tdep->is_fdpic) {
+    extern CORE_ADDR fdpic_find_global_pointer (CORE_ADDR addr);
     CORE_ADDR func_addr = find_function_addr (function, NULL);
 
     regcache_cooked_write_unsigned(regcache, 9, fdpic_find_global_pointer(func_addr));
   }
-#endif
+
 
   /* Finally, update teh SP register.  */
   regcache_cooked_write_unsigned (regcache, ARM_SP_REGNUM, sp);
@@ -9739,6 +9735,7 @@ arm_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   enum arm_float_model fp_model = arm_fp_model;
   struct tdesc_arch_data *tdesc_data = NULL;
   int i, is_m = 0;
+  int is_fdpic = 0;
   int have_vfp_registers = 0, have_vfp_pseudos = 0, have_neon_pseudos = 0;
   int have_neon = 0;
   int have_fpa_registers = 1;
@@ -9790,6 +9787,8 @@ arm_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 		case EF_ARM_EABI_VER4:
 		case EF_ARM_EABI_VER5:
 		  arm_abi = ARM_ABI_AAPCS;
+      if (e_flags & EF_ARM_FDPIC)
+        is_fdpic = 1;
 		  /* EABI binaries default to VFP float ordering.
 		     They may also contain build attributes that can
 		     be used to identify if the VFP argument-passing
@@ -10106,6 +10105,7 @@ arm_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   tdep->arm_abi = arm_abi;
   tdep->fp_model = fp_model;
   tdep->is_m = is_m;
+  tdep->is_fdpic = is_fdpic;
   tdep->have_fpa_registers = have_fpa_registers;
   tdep->have_vfp_registers = have_vfp_registers;
   tdep->have_vfp_pseudos = have_vfp_pseudos;
