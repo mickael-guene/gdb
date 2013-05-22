@@ -15,8 +15,6 @@
 
 /*
  TODO :
-    - memory leaks
-    - use hex_string_custom everywhere
     - internal TODOS :
       - implement endianess
       - fetch_loadmap shortcut (use a two steps procedure)
@@ -56,8 +54,7 @@ struct lm_info
 struct fdpic_info
 {
   struct lm_info *main_executable_lm_info;
-  struct elf32_fdpic_loadmap *exec_loadmap;
-  struct elf32_fdpic_loadmap *interp_loadmap;
+  int is_static_binary;
   CORE_ADDR lm_base_cache;
   CORE_ADDR main_lm_addr;
   int enable_break2_done;
@@ -99,6 +96,10 @@ fdpic_pspace_data_cleanup (struct program_space *pspace, void *arg)
   struct fdpic_info *info;
 
   info = program_space_data (pspace, solib_fdpic_pspace_data);
+  if (info && info->main_executable_lm_info) {
+    xfree(info->main_executable_lm_info->map);
+    xfree(info->main_executable_lm_info);
+  }
   xfree (info);
 }
 
@@ -115,9 +116,8 @@ get_fdpic_info (void)
   set_program_space_data (current_program_space, solib_fdpic_pspace_data, info);
 
   info->main_executable_lm_info = NULL;
-  info->exec_loadmap = NULL;
-  info->interp_loadmap = NULL;
   info->enable_break2_done = 0;
+  info->is_static_binary = 0;
 
   return info;
 }
@@ -168,37 +168,32 @@ dump_loadmap(struct elf32_fdpic_loadmap *loadmap)
     int i;
     fprintf_unfiltered(gdb_stdlog, "*** LOADMAP : %d segments detected\n", loadmap->nsegs);
     for(i=0;i<loadmap->nsegs;i++)
-      fprintf_unfiltered(gdb_stdlog, " - seg[%d] : 0x%08x map to 0x%08x for %d bytes\n", i, loadmap->segs[i].p_vaddr, loadmap->segs[i].addr, loadmap->segs[i].p_memsz);
+      fprintf_unfiltered(gdb_stdlog, " - seg[%d] : %s map to %s for %d bytes\n", i, hex_string_custom(loadmap->segs[i].p_vaddr, 8),
+                                                                                    hex_string_custom(loadmap->segs[i].addr, 8), loadmap->segs[i].p_memsz);
   }
 }
 
-static void
-fdpic_get_initial_loadmaps (void)
+static struct elf32_fdpic_loadmap *
+fdpic_get_initial_loadmaps(int is_interpeter)
 {
-  gdb_byte *buf;
-  struct fdpic_info *info = get_fdpic_info ();
+   gdb_byte *buf;
+   struct elf32_fdpic_loadmap *res;
 
   if (solib_fdpic_debug) {
-    fprintf_unfiltered(gdb_stdlog, "  %s\n", __FUNCTION__);
+    fprintf_unfiltered(gdb_stdlog, "  %s : %d\n", __FUNCTION__, is_interpeter);
   }
-  if (0 >= target_read_alloc (&current_target, TARGET_OBJECT_FDPIC, "exec", (gdb_byte**) &buf)) {
-    info->exec_loadmap = NULL;
-    error (_("Error reading FDPIC exec loadmap"));
+  /* read raw loadmap */
+  if (0 >= target_read_alloc (&current_target, TARGET_OBJECT_FDPIC, is_interpeter?"interp":"exec", (gdb_byte**) &buf)) {
+    if (!is_interpeter)
+      error (_("Error reading FDPIC exec loadmap"));
+    return NULL;
   } else if (solib_fdpic_debug) {
-    fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap\n");
+    fprintf_unfiltered(gdb_stdlog, "   - Successfully load %s loadmap\n", is_interpeter?"interpreter":"executable");
   }
-  info->exec_loadmap = decode_loadmap (buf);
-  dump_loadmap(info->exec_loadmap);
-  if (0 >= target_read_alloc (&current_target, TARGET_OBJECT_FDPIC, "interp", (gdb_byte**) &buf)) {
-    info->interp_loadmap = NULL;
-    if (solib_fdpic_debug)
-        fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap (static binary detected)\n");
-  } else {
-    if (solib_fdpic_debug)
-        fprintf_unfiltered(gdb_stdlog, "   - Successfully load executable loadmap\n");
-    info->interp_loadmap = decode_loadmap (buf);
-    dump_loadmap(info->interp_loadmap);
-  }
+  res = decode_loadmap (buf);
+  dump_loadmap(res);
+
+  return res;
 }
 
 static void
@@ -214,13 +209,20 @@ fdpic_relocate_main_executable (void)
   if (solib_fdpic_debug) {
     fprintf_unfiltered(gdb_stdlog, " %s\n", __FUNCTION__);
   }
-  /* get executable and interpreter loadmaps */
-  fdpic_get_initial_loadmaps();
-  loadmap = info->exec_loadmap;
+  /* get interpreter loadmap to see if we have a static or dynamic binary */
+  loadmap = fdpic_get_initial_loadmaps(1);
+  if (!loadmap)
+    info->is_static_binary = 1;
+  if (solib_fdpic_debug)
+    fprintf_unfiltered(gdb_stdlog, "*** %s binary detected\n", info->is_static_binary?"Statically linked":"Dynamically linked");
+  xfree(loadmap);
 
-  xfree (info->main_executable_lm_info);
+  if (info->main_executable_lm_info) {
+    xfree (info->main_executable_lm_info->map);
+    xfree (info->main_executable_lm_info);
+  }
   info->main_executable_lm_info = xcalloc (1, sizeof (struct lm_info));
-  info->main_executable_lm_info->map = loadmap;
+  info->main_executable_lm_info->map = fdpic_get_initial_loadmaps(0);;
 
   /* now relocate sections */
   new_offsets = xcalloc (symfile_objfile->num_sections, sizeof (struct section_offsets));
@@ -248,11 +250,11 @@ fdpic_relocate_main_executable (void)
         new_offsets->offsets[osect_idx] = loadmap->segs[seg].addr - loadmap->segs[seg].p_vaddr;
 
         if (solib_fdpic_debug > 1) {
-          fprintf_unfiltered(gdb_stdlog, "section %s[%d] relocate from 0x%08x to 0x%08x [%d]\n",
+          fprintf_unfiltered(gdb_stdlog, "section %s[%d] relocate from %s to %s [%d]\n",
                               osect->the_bfd_section->name,
                               osect_idx,
-                              (int)orig_addr,
-                              (int) (orig_addr + new_offsets->offsets[osect_idx]),
+                              hex_string_custom((int)orig_addr, 8),
+                              hex_string_custom((int) (orig_addr + new_offsets->offsets[osect_idx]), 8),
                               seg);
         }
 
@@ -413,9 +415,7 @@ enable_break2 (void)
       enable_break_failure_warning ();
       return 0;
     }
-
-    fdpic_get_initial_loadmaps (); //Do we need to redo that ?
-    ldm = info->interp_loadmap;
+    ldm = fdpic_get_initial_loadmaps(1);
 
     /* Record the relocated start and end address of the dynamic linker
        text and plt section for dsbt_in_dynsym_resolve_code. */
@@ -437,6 +437,7 @@ enable_break2 (void)
     if (addr == 0) {
       warning (_("Could not find symbol _dl_debug_addr in dynamic linker"));
       enable_break_failure_warning ();
+      xfree (ldm);
       bfd_close (tmp_bfd);
       return 0;
     }
@@ -457,6 +458,8 @@ enable_break2 (void)
       if (solib_fdpic_debug)
         fprintf_unfiltered (gdb_stdlog, "enable_break: ldso not yet initialized\n");
       /* Do not warn, but mark to run again.  */
+      xfree (ldm);
+      bfd_close (tmp_bfd);
       return 0;
     }
     /* Fetch the r_brk field.  It's 8 bytes from the start of dl_debug_addr.  */
@@ -464,6 +467,7 @@ enable_break2 (void)
       warning (_("Unable to fetch _dl_debug_addr->r_brk(at address %s) from dynamic linker"),
                   hex_string_custom (addr + 8, 8));
       enable_break_failure_warning ();
+      xfree (ldm);
       bfd_close (tmp_bfd);
       return 0;
     }
@@ -472,6 +476,7 @@ enable_break2 (void)
       warning (_("Unable to fetch _dl_debug_addr->.r_brk entry point (at address %s) from dynamic linker"),
                 hex_string_custom (addr, 8));
       enable_break_failure_warning ();
+      xfree (ldm);
       bfd_close (tmp_bfd);
       return 0;
     }
@@ -494,7 +499,7 @@ enable_break2 (void)
     /* in case we have a thumb entry then reset lower bits */
     addr &= ~1;
     if (solib_fdpic_debug)
-      fprintf_unfiltered (gdb_stdlog, "put solib breakpoint at 0x%08x\n", (int) addr);
+      fprintf_unfiltered (gdb_stdlog, "put solib breakpoint at %s\n", hex_string_custom((int) addr, 8));
     create_solib_event_breakpoint (target_gdbarch, addr);
 
     info->enable_break2_done = 1;
@@ -547,7 +552,7 @@ fdpic_in_dynsym_resolve_code (CORE_ADDR pc)
     || in_gnu_ifunc_stub (pc));
 
   if (solib_fdpic_debug) {
-    fprintf_unfiltered(gdb_stdlog, "%s\n : pc = 0x%08x => %d\n", __FUNCTION__, (int)pc, res);
+    fprintf_unfiltered(gdb_stdlog, "%s\n : pc = %s => %d\n", __FUNCTION__, hex_string_custom((int)pc, 8), res);
   }
 
   return res;
@@ -557,7 +562,7 @@ static int
 fdpic_open_symbol_file_object (void *from_ttyp)
 {
   if (solib_fdpic_debug) {
-    fprintf_unfiltered(gdb_stdlog, "%s : from_ttyp = 0x%016lx\n", __FUNCTION__, (long) from_ttyp);
+    fprintf_unfiltered(gdb_stdlog, "%s : from_ttyp = %s\n", __FUNCTION__, hex_string_custom((long) from_ttyp, 16));
   }
   /* Unimplemented.  */
   return 0;
@@ -592,7 +597,7 @@ fdpic_current_sos (void)
     fdpic_relocate_main_executable ();
 
   /* check for a static binary */
-  if (!info->interp_loadmap)
+  if (info->is_static_binary)
     return NULL;
 
   /* Locate the address of the first link map struct.  */
@@ -609,7 +614,7 @@ fdpic_current_sos (void)
     CORE_ADDR got_addr;
 
     if (solib_fdpic_debug) {
-      fprintf_unfiltered(gdb_stdlog, " Reading link map from 0x%08x\n", (int) lm_addr);
+      fprintf_unfiltered(gdb_stdlog, " Reading link map from %s\n", hex_string_custom((int) lm_addr, 8));
     }
 
     /* read link map */
@@ -696,6 +701,7 @@ fdpic_clear_solib (void)
   info->lm_base_cache = 0;
   info->enable_break2_done = 0;
   info->main_lm_addr = 0;
+  info->is_static_binary = 0;
   if (info->main_executable_lm_info != 0)
     {
       xfree (info->main_executable_lm_info->map);
@@ -708,7 +714,7 @@ static void
 fdpic_free_so (struct so_list *so)
 {
   if (solib_fdpic_debug) {
-    fprintf_unfiltered(gdb_stdlog, "%s : so = 0x%016lx\n", __FUNCTION__, (long)so);
+    fprintf_unfiltered(gdb_stdlog, "%s : so = %s\n", __FUNCTION__, hex_string_custom((long)so, 16));
   }
   xfree (so->lm_info->map);
   xfree (so->lm_info);
@@ -722,7 +728,9 @@ fdpic_relocate_section_addresses (struct so_list *so,
   struct elf32_fdpic_loadmap *map;
 
   if (solib_fdpic_debug > 1) {
-    fprintf_unfiltered(gdb_stdlog, "%s : so = 0x%016lx / sec = 0x%016lx\n", __FUNCTION__, (long)so, (long)sec);
+    fprintf_unfiltered(gdb_stdlog, "%s : so = %s / sec = %s\n", __FUNCTION__,
+                                                                hex_string_custom((long)so, 16),
+                                                                hex_string_custom((long)sec, 16));
   }
 
   map = so->lm_info->map;
