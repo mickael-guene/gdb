@@ -597,7 +597,11 @@ map_regcache_remote_table (struct gdbarch *gdbarch, struct packet_reg *regs)
       offset += register_size (gdbarch, remote_regs[regnum]->regnum);
     }
 
-  return offset;
+  /* very bad hack to avoid packet reply is too long message with jlink
+   * gdb server. There is a mismatch between g packet side on both side
+   * that prevent auto-detection to work
+   */
+  return offset * 2;
 }
 
 /* Given the architecture described by GDBARCH, return the remote
