@@ -222,7 +222,7 @@ fdpic_relocate_main_executable (void)
     xfree (info->main_executable_lm_info);
   }
   info->main_executable_lm_info = xcalloc (1, sizeof (struct lm_info));
-  info->main_executable_lm_info->map = fdpic_get_initial_loadmaps(0);;
+  info->main_executable_lm_info->map = fdpic_get_initial_loadmaps(0);
 
   /* now relocate sections */
   new_offsets = xcalloc (symfile_objfile->num_sections, sizeof (struct section_offsets));
@@ -244,6 +244,7 @@ fdpic_relocate_main_executable (void)
     /* Original address prior to any past relocations.  */
     orig_addr = addr - offset;
 
+    loadmap = info->main_executable_lm_info->map;
     for (seg = 0; seg < loadmap->nsegs; seg++) {
       if (loadmap->segs[seg].p_vaddr <= orig_addr
         && orig_addr < loadmap->segs[seg].p_vaddr + loadmap->segs[seg].p_memsz) {
