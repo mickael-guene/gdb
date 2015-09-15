@@ -192,6 +192,13 @@ dump_loadmap(struct elf32_fdpic_loadmap *loadmap)
   }
 }
 
+static void *fdpic_get_initial_loadmaps_return_error(int is_interpeter)
+{
+    if (!is_interpeter)
+      error (_("Error reading FDPIC exec loadmap"));
+    return NULL;
+}
+
 static struct elf32_fdpic_loadmap *
 fdpic_get_initial_loadmaps(int is_interpeter)
 {
@@ -201,15 +208,39 @@ fdpic_get_initial_loadmaps(int is_interpeter)
   if (solib_fdpic_debug) {
     fprintf_unfiltered(gdb_stdlog, "  %s : %d\n", __FUNCTION__, is_interpeter);
   }
-  /* read raw loadmap */
-  if (0 >= target_read_alloc (&current_target, TARGET_OBJECT_FDPIC, is_interpeter?"interp":"exec", (gdb_byte**) &buf)) {
-    if (!is_interpeter)
-      error (_("Error reading FDPIC exec loadmap"));
-    return NULL;
-  } else if (solib_fdpic_debug) {
+
+  if (core_bfd) {
+      /* Things would have been easier if we add kernel patch to ouput loadmap info in elf notes.
+       * Then we will just transorm those notes into pseudo sections and add TARGET_OBJECT_FDPIC support
+       * in core_xfer_partial() in corelow.c.
+       */
+      enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+      struct bfd_section *section;
+      gdb_byte addrbuf[4];
+      CORE_ADDR loadmap_addr;
+
+      /* extract loadmap address from corresponding pseudo section */
+      section = bfd_get_section_by_name (core_bfd, is_interpeter?".pr_interp_fdpic_loadmap_addr":".pr_exec_fdpic_loadmap_addr");
+	  if (section == NULL || !bfd_get_section_contents (core_bfd, section, &addrbuf, 0, 4))
+        return fdpic_get_initial_loadmaps_return_error(is_interpeter);
+      loadmap_addr = extract_unsigned_integer(addrbuf, 4/*INT_REGISTER_SIZE*/, byte_order);
+      if (!loadmap_addr)
+        return fdpic_get_initial_loadmaps_return_error(is_interpeter);
+
+      /* now read loadmap from memory */
+      buf = xmalloc (sizeof(struct elf32_fdpic_loadmap) + 2 * sizeof(struct elf32_fdpic_loadseg));
+      if (target_read_memory(loadmap_addr, buf, sizeof(struct elf32_fdpic_loadmap) + 2 * sizeof(struct elf32_fdpic_loadseg)) != 0)
+        return fdpic_get_initial_loadmaps_return_error(0);
+  } else {
+      /* read raw loadmap */
+      if (0 >= target_read_alloc (&current_target, TARGET_OBJECT_FDPIC, is_interpeter?"interp":"exec", (gdb_byte**) &buf))
+        return fdpic_get_initial_loadmaps_return_error(is_interpeter);
+  }
+  if (solib_fdpic_debug) {
     fprintf_unfiltered(gdb_stdlog, "   - Successfully load %s loadmap\n", is_interpeter?"interpreter":"executable");
   }
   res = decode_loadmap (buf);
+  xfree(buf);
   dump_loadmap(res);
 
   return res;
