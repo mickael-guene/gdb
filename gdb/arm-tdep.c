@@ -9772,7 +9772,7 @@ arm_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 		 anyway, so assume APCS.  */
 	      arm_abi = ARM_ABI_APCS;
 	    }
-	  else if (ei_osabi == ELFOSABI_NONE)
+	  else if (ei_osabi == ELFOSABI_NONE || ei_osabi == ELFOSABI_ARM_FDPIC)
 	    {
 	      int eabi_ver = EF_ARM_EABI_VERSION (e_flags);
 	      int attr_arch, attr_profile;
@@ -9787,7 +9787,7 @@ arm_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 		case EF_ARM_EABI_VER4:
 		case EF_ARM_EABI_VER5:
 		  arm_abi = ARM_ABI_AAPCS;
-      if (e_flags & EF_ARM_FDPIC)
+      if (ei_osabi == ELFOSABI_ARM_FDPIC)
         is_fdpic = 1;
 		  /* EABI binaries default to VFP float ordering.
 		     They may also contain build attributes that can

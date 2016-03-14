@@ -23,6 +23,8 @@
 
 #include "elf/reloc-macros.h"
 
+#define ELFOSABI_ARM_FDPIC    65
+
 /* Processor specific flags for the ELF header e_flags field.  */
 #define EF_ARM_RELEXEC     0x01
 #define EF_ARM_HASENTRY    0x02
@@ -36,7 +38,6 @@
 #define EF_ARM_SOFT_FLOAT  0x200
 #define EF_ARM_VFP_FLOAT   0x400
 #define EF_ARM_MAVERICK_FLOAT 0x800
-#define EF_ARM_FDPIC       0x1000
 
 /* Frame unwind information */
 #define PT_ARM_EXIDX (PT_LOPROC + 1)
